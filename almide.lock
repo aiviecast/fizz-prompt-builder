@@ -1,0 +1,3 @@
+# almide.lock — auto-generated, do not edit
+
+fizz_llm_client = { git = "https://github.com/Aid-On/fizz-llm-client", ref = "v0.1.0", commit = "2379672b5fcaa3083ddb2954cf8e38fce26bcfbe" }

@@ -1,0 +1,126 @@
+// fizz_prompt_builder — LLM メッセージ列の組み立て。
+//
+// 責務 (一行): persona + few-shot + 履歴 + recall + 着弾コメントを
+// LLM の messages 列に組み立てる。
+//
+// 旧 openaituber chat/aituber.ts の buildFewShotMessages + preamble 構築の移植。
+// 部品の疎結合のため、入力はすべてプリミティブで受ける (fizz-persona /
+// fizz-conversation-history / fizz-few-shot-retriever への直接依存を避け、
+// オーケストレータが型付きの素材をここへ渡す)。出力は fizz_llm_client の
+// Message 列 (= そのまま call_with に渡せる)。
+//
+// 組み立て順 (aituber.ts と同じ):
+//   1. system: persona の system prompt (+ recall preamble があれば連結)
+//   2. few-shot: 似た過去 Q/A を user→assistant の交互で
+//   3. history: 直近の会話ターン
+//   4. user: 今回の着弾コメント
+//
+// 方針 (memory): 会話は前の話題を引きずらせない。recall (長期記憶) は
+// preamble に「軽く」効かせるだけで、全量を流し込まない — 呼び出し側が
+// 要約済みの短い preamble を渡す前提。
+
+import fizz_llm_client
+
+type Example = { question: String, answer: String }
+
+type Inputs = {
+  // persona の system.md 本文。
+  system_prompt: String,
+  // recall 由来の短い preamble (常連メモ等)。none なら付けない。
+  recall_preamble: Option[String],
+  // 類似 Q/A (few-shot-retriever の出力を変換して渡す)。
+  examples: List[Example],
+  // 直近の会話履歴 (conversation-history を変換して渡す)。
+  history: List[fizz_llm_client.Message],
+  // 今回の着弾コメント。
+  comment_user: String,
+  comment_text: String,
+}
+
+// system メッセージ本文 = system_prompt (+ recall preamble)。
+local fn system_content(inp: Inputs) -> String =
+  match inp.recall_preamble {
+    none    => inp.system_prompt,
+    some(p) =>
+      if string.trim(p) == "" then inp.system_prompt
+      else "${inp.system_prompt}\n\n[前提メモ]\n${p}",
+  }
+
+// few-shot を user→assistant の交互メッセージへ。
+local fn example_messages(examples: List[Example]) -> List[fizz_llm_client.Message] =
+  list.fold(examples, no_msgs(), (acc, ex) =>
+    acc + [fizz_llm_client.user(ex.question), fizz_llm_client.assistant(ex.answer)])
+
+local fn no_msgs() -> List[fizz_llm_client.Message] = []
+
+// 着弾コメントを「user名: 本文」の 1 user メッセージへ。
+local fn comment_message(inp: Inputs) -> fizz_llm_client.Message =
+  if string.trim(inp.comment_user) == "" then fizz_llm_client.user(inp.comment_text)
+  else fizz_llm_client.user("${inp.comment_user}: ${inp.comment_text}")
+
+// 完成した messages 列。
+fn build(inp: Inputs) -> List[fizz_llm_client.Message] =
+  [fizz_llm_client.system(system_content(inp))]
+    + example_messages(inp.examples)
+    + inp.history
+    + [comment_message(inp)]
+
+// ── in-file tests ────────────────────────────────────────────────────
+
+local fn base_inputs() -> Inputs = Inputs {
+  system_prompt: "あなたは空澄ラムネ。",
+  recall_preamble: none,
+  examples: [],
+  history: no_msgs(),
+  comment_user: "viewer",
+  comment_text: "こんにちは",
+}
+
+test "minimal prompt is system + comment" {
+  let msgs = build(base_inputs())
+  assert_eq(list.len(msgs), 2)
+  assert_eq(list.first(msgs)!.role, "system")
+  assert_eq(list.last(msgs)!.role, "user")
+  assert_eq(list.last(msgs)!.content, "viewer: こんにちは")
+}
+
+test "recall preamble is folded into the system message" {
+  let inp = { ...base_inputs(), recall_preamble: some("この人は常連。猫好き。") }
+  let msgs = build(inp)
+  assert(string.contains(list.first(msgs)!.content, "前提メモ"))
+  assert(string.contains(list.first(msgs)!.content, "猫好き"))
+}
+
+test "blank recall preamble is ignored" {
+  let inp = { ...base_inputs(), recall_preamble: some("   ") }
+  assert_eq(list.first(build(inp))!.content, "あなたは空澄ラムネ。")
+}
+
+test "few-shot examples become alternating user/assistant turns" {
+  let inp = { ...base_inputs(), examples: [
+    Example { question: "好きな色は？", answer: "[happy]みずいろ！" },
+  ] }
+  let msgs = build(inp)
+  // system + (user,assistant) + comment = 4
+  assert_eq(list.len(msgs), 4)
+  assert_eq(list.get(msgs, 1)!.role, "user")
+  assert_eq(list.get(msgs, 1)!.content, "好きな色は？")
+  assert_eq(list.get(msgs, 2)!.role, "assistant")
+}
+
+test "history is placed between few-shot and the current comment" {
+  let inp = { ...base_inputs(),
+    examples: [Example { question: "q", answer: "a" }],
+    history: [fizz_llm_client.user("前の発言"), fizz_llm_client.assistant("前の返事")],
+  }
+  let msgs = build(inp)
+  // system, user(q), assistant(a), user(前の発言), assistant(前の返事), user(comment)
+  assert_eq(list.len(msgs), 6)
+  assert_eq(list.get(msgs, 3)!.content, "前の発言")
+  assert_eq(list.last(msgs)!.content, "viewer: こんにちは")
+}
+
+test "anonymous comment omits the name prefix" {
+  let inp = { ...base_inputs(), comment_user: "" }
+  assert_eq(list.last(build(inp))!.content, "こんにちは")
+}
