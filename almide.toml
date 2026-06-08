@@ -1,6 +1,6 @@
 [package]
 name = "fizz_prompt_builder"
-version = "0.1.0"
+version = "0.1.1"
 description = "Fizz brain — assemble LLM messages from persona system prompt + recall + few-shot + history + comment. -> List[Message]"
 
 [dependencies]

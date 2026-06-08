@@ -21,15 +21,16 @@
 
 import fizz_llm_client
 
-type Example = { question: String, answer: String }
-
+// few-shot 例は (質問, 回答) のタプルで受ける。専用 record 型を持たない
+// のは意図的: fizz_persona.examples.FewShotExample 等 同形 record と
+// codegen 上で衝突するのを避けるため (呼び出し側が tuple に変換して渡す)。
 type Inputs = {
   // persona の system.md 本文。
   system_prompt: String,
   // recall 由来の短い preamble (常連メモ等)。none なら付けない。
   recall_preamble: Option[String],
-  // 類似 Q/A (few-shot-retriever の出力を変換して渡す)。
-  examples: List[Example],
+  // 類似 Q/A (質問, 回答) — few-shot-retriever の出力を変換して渡す。
+  examples: List[(String, String)],
   // 直近の会話履歴 (conversation-history を変換して渡す)。
   history: List[fizz_llm_client.Message],
   // 今回の着弾コメント。
@@ -47,11 +48,12 @@ local fn system_content(inp: Inputs) -> String =
   }
 
 // few-shot を user→assistant の交互メッセージへ。
-local fn example_messages(examples: List[Example]) -> List[fizz_llm_client.Message] =
+local fn example_messages(examples: List[(String, String)]) -> List[fizz_llm_client.Message] =
   list.fold(examples, no_msgs(), (acc, ex) =>
-    acc + [fizz_llm_client.user(ex.question), fizz_llm_client.assistant(ex.answer)])
+    acc + [fizz_llm_client.user(ex.0), fizz_llm_client.assistant(ex.1)])
 
 local fn no_msgs() -> List[fizz_llm_client.Message] = []
+local fn no_examples() -> List[(String, String)] = []
 
 // 着弾コメントを「user名: 本文」の 1 user メッセージへ。
 local fn comment_message(inp: Inputs) -> fizz_llm_client.Message =
@@ -70,7 +72,7 @@ fn build(inp: Inputs) -> List[fizz_llm_client.Message] =
 local fn base_inputs() -> Inputs = Inputs {
   system_prompt: "あなたは空澄ラムネ。",
   recall_preamble: none,
-  examples: [],
+  examples: no_examples(),
   history: no_msgs(),
   comment_user: "viewer",
   comment_text: "こんにちは",
@@ -98,7 +100,7 @@ test "blank recall preamble is ignored" {
 
 test "few-shot examples become alternating user/assistant turns" {
   let inp = { ...base_inputs(), examples: [
-    Example { question: "好きな色は？", answer: "[happy]みずいろ！" },
+    ("好きな色は？", "[happy]みずいろ！"),
   ] }
   let msgs = build(inp)
   // system + (user,assistant) + comment = 4
@@ -110,7 +112,7 @@ test "few-shot examples become alternating user/assistant turns" {
 
 test "history is placed between few-shot and the current comment" {
   let inp = { ...base_inputs(),
-    examples: [Example { question: "q", answer: "a" }],
+    examples: [("q", "a")],
     history: [fizz_llm_client.user("前の発言"), fizz_llm_client.assistant("前の返事")],
   }
   let msgs = build(inp)
