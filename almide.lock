@@ -1,3 +1,3 @@
 # almide.lock — auto-generated, do not edit
 
-fizz_llm_client = { git = "https://github.com/aiviecast/fizz-llm-client", ref = "v0.2.1", commit = "555ac1d9e5c2041a0e995d13702368c58285ab17" }
+fizz_llm_client = { git = "https://github.com/aiviecast/fizz-llm-client", ref = "v0.3.0", commit = "246cc32cff8b491a885b71201807ffc44c540c77" }
